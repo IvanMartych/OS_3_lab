@@ -4,8 +4,12 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <stdio.h>
+#include <semaphore.h>
 
 #define SHM_SIZE 4096
+#define MMAP_FILE "shared_data.bin"
+#define SEM_PARENT "/sem_parent_ready"
+#define SEM_CHILD "/sem_child_ready"
 
 typedef struct {
     char data[SHM_SIZE - 4];
@@ -54,21 +58,37 @@ void float_to_str(float num, char* buf) {
 }
 
 int main(int argc, char* argv[]) {
-    // Открываем shared memory
-    int shm_fd = shm_open("/numbers_shm", O_RDWR, 0644);
-    if (shm_fd == -1) {
-        write_str(STDERR_FILENO, "Error: cannot open shared memory\n");
+    // Открываем существующие named семафоры
+    sem_t *sem_parent = sem_open(SEM_PARENT, 0);
+    if (sem_parent == SEM_FAILED) {
+        write_str(STDERR_FILENO, "Error: sem_open parent failed in child\n");
+        return 1;
+    }
+    
+    sem_t *sem_child = sem_open(SEM_CHILD, 0);
+    if (sem_child == SEM_FAILED) {
+        write_str(STDERR_FILENO, "Error: sem_open child failed in child\n");
+        sem_close(sem_parent);
+        return 1;
+    }
+    
+    // Открываем memory-mapped file
+    int fd = open(MMAP_FILE, O_RDWR, 0644);
+    if (fd == -1) {
+        write_str(STDERR_FILENO, "Error: cannot open memory-mapped file\n");
         return 1;
     }
     
     shared_data_t* shared_data = mmap(NULL, SHM_SIZE, 
                                      PROT_READ | PROT_WRITE, 
-                                     MAP_SHARED, shm_fd, 0);
+                                     MAP_SHARED, fd, 0);
     if (shared_data == MAP_FAILED) {
         write_str(STDERR_FILENO, "Error: mmap failed in child\n");
-        close(shm_fd);
+        close(fd);
         return 1;
     }
+    
+    close(fd); // Дескриптор больше не нужен после mmap
     
     // Первое сообщение содержит имя файла
     char filename[256];
@@ -80,33 +100,32 @@ int main(int argc, char* argv[]) {
     if (file_fd == -1) {
         write_str(STDERR_FILENO, "Error: cannot open output file\n");
         munmap(shared_data, SHM_SIZE);
-        close(shm_fd);
         return 1;
     }
     
     char buffer[1024];
     float numbers[100];
     
-    // Сигнализируем, что прочитали имя файла
+    // Увеличиваем семафор - сигнализируем, что прочитали имя файла
     shared_data->data_ready = 0;
+    sem_post(sem_child);
     
     // Основной цикл обработки данных
     while (1) {
-        // Ждем новых данных от родительского процесса
-        while (shared_data->data_ready == 0) {
-            usleep(1000);
-        }
+        // Ждём семафор от родительского процесса (данные готовы)
+        sem_wait(sem_parent);
         
         if (shared_data->data_ready == 2) {
             break; // Сигнал о завершении
         }
         
-        // Копируем данные из shared memory
+        // Копируем данные из memory-mapped file
         strncpy(buffer, shared_data->data, sizeof(buffer) - 1);
         buffer[sizeof(buffer) - 1] = '\0';
         
-        // Сигнализируем, что прочитали данные
+        // Увеличиваем семафор - сигнализируем, что прочитали данные
         shared_data->data_ready = 0;
+        sem_post(sem_child);
         
         // Парсинг чисел
         int count = 0;
@@ -155,7 +174,10 @@ int main(int argc, char* argv[]) {
     // Очистка ресурсов
     close(file_fd);
     munmap(shared_data, SHM_SIZE);
-    close(shm_fd);
+    
+    // Закрываем семафоры
+    sem_close(sem_parent);
+    sem_close(sem_child);
     
     return 0;
 }
