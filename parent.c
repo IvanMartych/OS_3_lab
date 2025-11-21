@@ -8,7 +8,7 @@
 #include <semaphore.h>
 
 #define SHM_SIZE 4096
-#define MMAP_FILE "shared_data.bin"
+#define SHM_NAME "/shared_memory"
 #define SEM_PARENT "/sem_parent_ready"
 #define SEM_CHILD "/sem_child_ready"
 
@@ -41,36 +41,36 @@ int main() {
         return 1;
     }
     
-    // Удаляем старый файл, если существует
-    unlink(MMAP_FILE);
+    // Удаляем старый shared memory объект, если существует
+    shm_unlink(SHM_NAME);
     
-    // Создаем обычный файл для memory mapping
-    int fd = open(MMAP_FILE, O_RDWR | O_CREAT | O_TRUNC, 0644);
-    if (fd == -1) {
-        write_str(STDERR_FILENO, "Error: file creation failed\n");
+    
+    int shm_fd = shm_open(SHM_NAME, O_RDWR | O_CREAT | O_EXCL, 0644);
+    if (shm_fd == -1) {
+        write_str(STDERR_FILENO, "Error: shm_open failed\n");
         return 1;
     }
     
-    // Устанавливаем размер файла
-    if (ftruncate(fd, SHM_SIZE) == -1) {
+    // Устанавливаем размер shared memory
+    if (ftruncate(shm_fd, SHM_SIZE) == -1) {
         write_str(STDERR_FILENO, "Error: ftruncate failed\n");
-        close(fd);
-        unlink(MMAP_FILE);
+        close(shm_fd);
+        shm_unlink(SHM_NAME);
         return 1;
     }
     
-    // Отображаем файл в память (memory-mapped file)
+    // Отображаем shared memory в адресное пространство процесса
     shared_data_t* shared_data = mmap(NULL, SHM_SIZE, 
                                      PROT_READ | PROT_WRITE, 
-                                     MAP_SHARED, fd, 0);
+                                     MAP_SHARED, shm_fd, 0);
     if (shared_data == MAP_FAILED) {
         write_str(STDERR_FILENO, "Error: mmap failed\n");
-        close(fd);
-        unlink(MMAP_FILE);
+        close(shm_fd);
+        shm_unlink(SHM_NAME);
         return 1;
     }
     
-    close(fd); // Дескриптор больше не нужен после mmap
+    close(shm_fd); // Дескриптор больше не нужен после mmap
     
     // Инициализируем shared memory
     shared_data->data_ready = 0;
@@ -83,7 +83,7 @@ int main() {
     if (bytes <= 0) {
         write_str(STDERR_FILENO, "Error: reading filename failed\n");
         munmap(shared_data, SHM_SIZE);
-        shm_unlink("/numbers_shm");
+        shm_unlink(SHM_NAME);
         return 1;
     }
     filename[bytes] = '\0';
@@ -106,7 +106,7 @@ int main() {
     if (pid == -1) {
         write_str(STDERR_FILENO, "Error: fork failed\n");
         munmap(shared_data, SHM_SIZE);
-        unlink(MMAP_FILE);
+        shm_unlink(SHM_NAME);
         return 1;
     }
     
@@ -119,7 +119,7 @@ int main() {
         exit(1);
     } else {
         // Родительский процесс
-        sleep(1); // Даем время дочернему процессу инициализироваться
+        sleep(1);
         
         write_str(STDOUT_FILENO, "Enter numbers (one line at a time):\n");
         
@@ -158,7 +158,7 @@ int main() {
             
             total_sent += bytes;
             
-            // Защита от переполнения (грубая оценка)
+            // Защита от переполнения 
             if (total_sent > SHM_SIZE * 10) {
                 write_str(STDERR_FILENO, "Warning: large amount of data sent\n");
             }
@@ -169,7 +169,7 @@ int main() {
         
         // Очистка ресурсов
         munmap(shared_data, SHM_SIZE);
-        unlink(MMAP_FILE); // Удаляем файл
+        shm_unlink(SHM_NAME); // Удаляем shared memory объект
         
         // Закрываем и удаляем семафоры
         sem_close(sem_parent);

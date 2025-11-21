@@ -7,7 +7,7 @@
 #include <semaphore.h>
 
 #define SHM_SIZE 4096
-#define MMAP_FILE "shared_data.bin"
+#define SHM_NAME "/shared_memory"
 #define SEM_PARENT "/sem_parent_ready"
 #define SEM_CHILD "/sem_child_ready"
 
@@ -72,23 +72,23 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    // Открываем memory-mapped file
-    int fd = open(MMAP_FILE, O_RDWR, 0644);
-    if (fd == -1) {
-        write_str(STDERR_FILENO, "Error: cannot open memory-mapped file\n");
+    // Открываем POSIX shared memory объект
+    int shm_fd = shm_open(SHM_NAME, O_RDWR, 0644);
+    if (shm_fd == -1) {
+        write_str(STDERR_FILENO, "Error: cannot open shared memory\n");
         return 1;
     }
     
     shared_data_t* shared_data = mmap(NULL, SHM_SIZE, 
                                      PROT_READ | PROT_WRITE, 
-                                     MAP_SHARED, fd, 0);
+                                     MAP_SHARED, shm_fd, 0);
     if (shared_data == MAP_FAILED) {
         write_str(STDERR_FILENO, "Error: mmap failed in child\n");
-        close(fd);
+        close(shm_fd);
         return 1;
     }
     
-    close(fd); // Дескриптор больше не нужен после mmap
+    close(shm_fd); // Дескриптор больше не нужен после mmap
     
     // Первое сообщение содержит имя файла
     char filename[256];
