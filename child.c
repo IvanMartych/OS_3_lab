@@ -12,8 +12,7 @@
 #define SEM_CHILD "/sem_child_ready"
 
 typedef struct {
-    char data[SHM_SIZE - 4];
-    int data_ready;
+    char data[SHM_SIZE];
 } shared_data_t;
 
 void write_str(int fd, const char* str) {
@@ -72,7 +71,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    // Открываем POSIX shared memory объект
+    
     int shm_fd = shm_open(SHM_NAME, O_RDWR, 0644);
     if (shm_fd == -1) {
         write_str(STDERR_FILENO, "Error: cannot open shared memory\n");
@@ -107,7 +106,6 @@ int main(int argc, char* argv[]) {
     float numbers[100];
     
     // Увеличиваем семафор - сигнализируем, что прочитали имя файла
-    shared_data->data_ready = 0;
     sem_post(sem_child);
     
     // Основной цикл обработки данных
@@ -115,16 +113,17 @@ int main(int argc, char* argv[]) {
         // Ждём семафор от родительского процесса (данные готовы)
         sem_wait(sem_parent);
         
-        if (shared_data->data_ready == 2) {
-            break; // Сигнал о завершении
-        }
-        
         // Копируем данные из memory-mapped file
         strncpy(buffer, shared_data->data, sizeof(buffer) - 1);
         buffer[sizeof(buffer) - 1] = '\0';
         
+        // Проверяем на конец передачи (пустая строка)
+        if (strlen(buffer) == 0 || (strlen(buffer) == 1 && buffer[0] == '\n')) {
+            sem_post(sem_child); // Подтверждаем получение сигнала завершения
+            break;
+        }
+        
         // Увеличиваем семафор - сигнализируем, что прочитали данные
-        shared_data->data_ready = 0;
         sem_post(sem_child);
         
         // Парсинг чисел

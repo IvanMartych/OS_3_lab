@@ -13,8 +13,7 @@
 #define SEM_CHILD "/sem_child_ready"
 
 typedef struct {
-    char data[SHM_SIZE - 4];
-    int data_ready; // 0 - не готово, 1 - готово к чтению, 2 - конец передачи
+    char data[SHM_SIZE];
 } shared_data_t;
 
 void write_str(int fd, const char* str) {
@@ -44,14 +43,13 @@ int main() {
     // Удаляем старый shared memory объект, если существует
     shm_unlink(SHM_NAME);
     
-    
     int shm_fd = shm_open(SHM_NAME, O_RDWR | O_CREAT | O_EXCL, 0644);
     if (shm_fd == -1) {
         write_str(STDERR_FILENO, "Error: shm_open failed\n");
         return 1;
     }
     
-    // Устанавливаем размер shared memory
+    
     if (ftruncate(shm_fd, SHM_SIZE) == -1) {
         write_str(STDERR_FILENO, "Error: ftruncate failed\n");
         close(shm_fd);
@@ -73,7 +71,6 @@ int main() {
     close(shm_fd); // Дескриптор больше не нужен после mmap
     
     // Инициализируем shared memory
-    shared_data->data_ready = 0;
     shared_data->data[0] = '\0';
     
     // Запрос имени файла у пользователя
@@ -136,24 +133,22 @@ int main() {
             
             buffer[bytes] = '\0';
             
-            // Ждём семафор от дочернего процесса (данные прочитаны)
-            if (shared_data->data_ready == 1) {
-                sem_wait(sem_child);
-            }
+            // Ждём, пока дочерний процесс прочитает предыдущие данные
+            sem_wait(sem_child);
             
             // Копируем данные в memory-mapped file
             strncpy(shared_data->data, buffer, sizeof(shared_data->data) - 1);
             shared_data->data[sizeof(shared_data->data) - 1] = '\0';
-            shared_data->data_ready = 1; // Помечаем как готовые к чтению
             
             // Проверяем на конец ввода (пустая строка)
             if (bytes == 1 && buffer[0] == '\n') {
-                shared_data->data_ready = 2; // Сигнал о завершении
-                sem_post(sem_parent); // Уведомляем дочерний процесс
+                // Для сигнала завершения можно использовать специальную метку в данных
+                // или просто закрыть семафор после выхода из цикла
+                sem_post(sem_parent); // Последнее уведомление
                 break;
             }
             
-            // Увеличиваем семафор - уведомляем дочерний процесс (данные готовы)
+            // Уведомляем дочерний процесс, что данные готовы
             sem_post(sem_parent);
             
             total_sent += bytes;
